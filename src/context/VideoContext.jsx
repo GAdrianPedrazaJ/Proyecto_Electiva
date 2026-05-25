@@ -1,103 +1,132 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback } from "react";
 
-const VideoContext = createContext(null);
+const VideoContext = createContext();
 
-function getStoredVideos() {
-  if (typeof window === 'undefined') return [];
-  try {
-    const stored = window.localStorage.getItem('contalento_videos');
-    return stored ? JSON.parse(stored) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveVideos(videos) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem('contalento_videos', JSON.stringify(videos));
-  } catch {
-    // ignore storage errors
-  }
-}
-
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
-    reader.readAsDataURL(file);
-  });
-}
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001/api";
 
 export function VideoProvider({ children }) {
-  const [videos, setVideos] = useState(() => getStoredVideos());
-  const [query, setQuery] = useState('');
+  const [rawVideos, setRawVideos] = useState([]);
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // ── Cargar videos desde el backend ──────────────────────────────────────
+  const fetchVideos = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_URL}/videos`);
+      if (!res.ok) throw new Error("Error al cargar videos");
+      const data = await res.json();
+      setRawVideos(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    saveVideos(videos);
-  }, [videos]);
+    fetchVideos();
+  }, [fetchVideos]);
 
-  const filtered = useMemo(() => {
-    return videos.filter((video) => {
-      const term = query.toLowerCase();
-      return (
-        video.title.toLowerCase().includes(term) ||
-        video.creator.toLowerCase().includes(term) ||
-        video.category.toLowerCase().includes(term)
+  // ── Videos filtrados por búsqueda ────────────────────────────────────────
+  const videos = query.trim()
+    ? rawVideos.filter(
+        (v) =>
+          v.title.toLowerCase().includes(query.toLowerCase()) ||
+          v.category.toLowerCase().includes(query.toLowerCase()) ||
+          v.creator?.toLowerCase().includes(query.toLowerCase())
+      )
+    : rawVideos;
+
+  // ── Videos guardados ─────────────────────────────────────────────────────
+  const savedVideos = rawVideos.filter((v) => v.saved);
+
+  // ── Toggle like ──────────────────────────────────────────────────────────
+  const toggleLike = async (id) => {
+    // Optimistic update
+    setRawVideos((prev) =>
+      prev.map((v) =>
+        v.id === id
+          ? { ...v, liked: !v.liked, likes: v.liked ? v.likes - 1 : v.likes + 1 }
+          : v
+      )
+    );
+    try {
+      const res = await fetch(`${API_URL}/videos/${id}/like`, { method: "PATCH" });
+      if (!res.ok) throw new Error();
+      const updated = await res.json();
+      setRawVideos((prev) => prev.map((v) => (v.id === id ? updated : v)));
+    } catch {
+      // Revertir si falla
+      setRawVideos((prev) =>
+        prev.map((v) =>
+          v.id === id
+            ? { ...v, liked: !v.liked, likes: v.liked ? v.likes - 1 : v.likes + 1 }
+            : v
+        )
       );
-    });
-  }, [query, videos]);
-
-  const toggleLike = (id) => {
-    setVideos((current) =>
-      current.map((video) =>
-        video.id === id
-          ? {
-              ...video,
-              liked: !video.liked,
-              likes: video.liked ? video.likes - 1 : video.likes + 1,
-            }
-          : video
-      )
-    );
+    }
   };
 
-  const toggleSave = (id) => {
-    setVideos((current) =>
-      current.map((video) =>
-        video.id === id ? { ...video, saved: !video.saved } : video
-      )
+  // ── Toggle save ──────────────────────────────────────────────────────────
+  const toggleSave = async (id) => {
+    // Optimistic update
+    setRawVideos((prev) =>
+      prev.map((v) => (v.id === id ? { ...v, saved: !v.saved } : v))
     );
+    try {
+      const res = await fetch(`${API_URL}/videos/${id}/save`, { method: "PATCH" });
+      if (!res.ok) throw new Error();
+      const updated = await res.json();
+      setRawVideos((prev) => prev.map((v) => (v.id === id ? updated : v)));
+    } catch {
+      // Revertir si falla
+      setRawVideos((prev) =>
+        prev.map((v) => (v.id === id ? { ...v, saved: !v.saved } : v))
+      );
+    }
   };
 
+  // ── Subir video ──────────────────────────────────────────────────────────
   const uploadVideo = async ({ title, description, category, videoFile }) => {
-    if (!videoFile) return;
+    const formData = new FormData();
+    formData.append("title", title);
+    formData.append("description", description || "");
+    formData.append("category", category || "General");
+    formData.append("video", videoFile);
 
-    const dataUrl = await fileToDataUrl(videoFile);
+    const res = await fetch(`${API_URL}/videos`, {
+      method: "POST",
+      body: formData,
+    });
 
-    const nextVideo = {
-      id: `v${videos.length + 1}`,
-      title,
-      creator: 'Creador ConTalento',
-      date: new Date().toISOString().split('T')[0],
-      likes: 0,
-      saved: false,
-      liked: false,
-      category,
-      description,
-      url: dataUrl,
-      fileName: videoFile.name,
-    };
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || "Error al subir el video");
+    }
 
-    setVideos((current) => [nextVideo, ...current]);
+    const newVideo = await res.json();
+    setRawVideos((prev) => [newVideo, ...prev]);
+    return newVideo;
   };
-
-  const savedVideos = videos.filter((video) => video.saved);
 
   return (
     <VideoContext.Provider
-      value={{ videos: filtered, query, setQuery, toggleLike, toggleSave, uploadVideo, savedVideos, rawVideos: videos }}
+      value={{
+        videos,
+        rawVideos,
+        savedVideos,
+        query,
+        setQuery,
+        toggleLike,
+        toggleSave,
+        uploadVideo,
+        loading,
+        error,
+        refetch: fetchVideos,
+      }}
     >
       {children}
     </VideoContext.Provider>
@@ -105,19 +134,15 @@ export function VideoProvider({ children }) {
 }
 
 export function useVideos() {
-  const context = useContext(VideoContext);
-  if (!context) {
-    throw new Error('useVideos debe usarse dentro de VideoProvider');
-  }
-  return context;
+  return useContext(VideoContext);
 }
 
 export function useLikes() {
-  const { toggleLike } = useVideos();
-  return { toggleLike };
+  const { toggleLike, videos } = useContext(VideoContext);
+  return { toggleLike, videos };
 }
 
 export function useSaved() {
-  const { toggleSave } = useVideos();
-  return { toggleSave };
+  const { toggleSave, savedVideos } = useContext(VideoContext);
+  return { toggleSave, savedVideos };
 }
