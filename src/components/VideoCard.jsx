@@ -2,6 +2,8 @@ import { HeartIcon, BookmarkIcon } from './icons.jsx';
 import { useLikes } from '../hooks/useLikes.js';
 import { useSaved } from '../hooks/useSaved.js';
 
+const isImage = (url) => /\.(jpg|jpeg|png|gif|webp|svg)(\?.*)?$/i.test(url);
+
 function VideoCard({ video }) {
   const { toggleLike } = useLikes();
   const { toggleSave } = useSaved();
@@ -10,14 +12,22 @@ function VideoCard({ video }) {
     <article className="group overflow-hidden rounded-3xl border border-slate-800 bg-slate-900/90 shadow-soft transition hover:-translate-y-0.5 hover:border-slate-700">
       <div className="relative overflow-hidden bg-slate-950">
         {video.url ? (
-          <video
-            src={video.url}
-            controls
-            className="h-52 w-full object-cover"
-          />
+          isImage(video.url) ? (
+            <img
+              src={video.url}
+              alt={video.title}
+              className="h-52 w-full object-cover"
+            />
+          ) : (
+            <video
+              src={video.url}
+              controls
+              className="h-52 w-full object-cover"
+            />
+          )
         ) : (
           <div className="flex h-52 items-center justify-center bg-slate-900 text-slate-500">
-            Video sin vista previa
+            Sin vista previa
           </div>
         )}
         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 to-transparent px-4 py-3 text-white">
@@ -61,3 +71,4 @@ function VideoCard({ video }) {
 }
 
 export default VideoCard;
+
